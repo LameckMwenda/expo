@@ -1,97 +1,2000 @@
----
-title: Start developing
-description: Make your first change to an Expo project and see it live on your device.
-hideTOC: true
----
+import React, { useState, useEffect, createContext, useContext, useRef, useCallback } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
+import { getFirestore, doc, setDoc, collection, query, onSnapshot, addDoc, updateDoc, deleteDoc, serverTimestamp, getDocs } from 'firebase/firestore';
+import { format, isToday, isPast, parseISO } from 'date-fns';
+import jsPDF from 'jspdf';
+import html2canvas from 'html2canvas';
 
-import { ProjectStructure } from '~/scenes/get-started/start-developing/ProjectStructure';
-import { TemplateFeatures } from '~/scenes/get-started/start-developing/TemplateFeatures';
-import { Collapsible } from '~/ui/components/Collapsible';
-import { ContentSpotlight } from '~/ui/components/ContentSpotlight';
-import { Terminal, DiffBlock } from '~/ui/components/Snippet';
-import { Step } from '~/ui/components/Step';
+// --- Firebase Context ---
+const FirebaseContext = createContext(null);
 
-<Step label="1">
-## Start a development server
-To start the development server, run the following command:
+// Firebase Provider component to initialize Firebase and manage auth state
+const FirebaseProvider = ({ children }) => {
+  const [db, setDb] = useState(null);
+  const [auth, setAuth] = useState(null);
+  const [userId, setUserId] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState(null);
 
-<Terminal cmd={['$ npx expo start']} />
+  useEffect(() => {
+    try {
+      const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-biotrack-lab-app';
+      const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
 
-</Step>
-
-<Step label="2">
-## Open the app on your device
-
-After running the command above, you will see a QR code in your terminal. Scan this QR code to open the app on your device.
-
-If you're using an Android Emulator or iOS Simulator, you can press <kbd>a</kbd> or <kbd>i</kbd> respectively to open the app.
-
-<Collapsible summary="Having problems?">
-
-Make sure you are on the same Wi-Fi network on your computer and your device.
-
-If it still doesn't work, it may be due to the router configuration &mdash; this is common for public networks. You can work around this by choosing the **Tunnel** connection type when starting the development server, then scanning the QR code again.
-
-<Terminal cmd={['$ npx expo start --tunnel']} />
-
-> Using the **Tunnel** connection type will make the app reloads considerably slower than on **LAN** or **Local**, so it's best to avoid tunnel when possible. You may want to install and use an emulator or simulator to speed up development if **Tunnel** is required to access your machine from another device on your network.
-
-</Collapsible>
-
-</Step>
-
-<Step label="3">
-
-## Make your first change
-
-Open the **app/(tabs)/index.tsx** file in your code editor and make a change.
-
-<DiffBlock
-  raw={`diff --git a/app/(tabs)/index.tsx b/app/(tabs)/index.tsx
-index 45cfa0e..4d1b384 100644
---- a/app/(tabs)/index.tsx
-+++ b/app/(tabs)/index.tsx
-@@ -17,7 +17,7 @@ export default function HomeScreen() {
+      if (!firebaseConfig || Object.keys(firebaseConfig).length === 0) {
+        console.error("Firebase config is missing or empty.");
+        setAuthError("Firebase is not configured. Please ensure __firebase_config is set.");
+        setLoading(false);
+        return;
       }
-    >
-      <ThemedView style={styles.titleContainer}>
--       <ThemedText type="title">Welcome!</ThemedText>
-+       <ThemedText type="title">Hello World!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-  `}
-/>
 
-<Collapsible summary="Changes not showing up on your device?">
+      const app = initializeApp(firebaseConfig);
+      const firestoreDb = getFirestore(app);
+      const firebaseAuth = getAuth(app);
 
-Expo Go is configured by default to automatically reload the app whenever a file is changed, but let's make sure to go over the steps to enable it in case somehow things aren't working.
+      setDb(firestoreDb);
+      setAuth(firebaseAuth);
 
-- Make sure you have the [development mode enabled in Expo CLI](/workflow/development-mode#development-mode).
-- Close the Expo app and reopen it.
-- Once the app is open again, shake your device to reveal the developer menu. If you are using an emulator, press <kbd>Ctrl</kbd> + <kbd>M</kbd> for Android or <kbd>Cmd ⌘</kbd> + <kbd>D</kbd> for iOS.
-- If you see **Enable Fast Refresh**, press it. If you see **Disable Fast Refresh**, dismiss the developer menu. Now try making another change.
+      const initialSignIn = async () => {
+        try {
+          if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+            await signInWithCustomToken(firebaseAuth, __initial_auth_token);
+            console.log("Signed in with custom token.");
+          } else {
+            await signInAnonymously(firebaseAuth);
+            console.log("Signed in anonymously.");
+          }
+        } catch (error) {
+          console.error("Firebase initial sign-in error:", error);
+          setAuthError(`Authentication failed: ${error.message}`);
+        } finally {
+          setLoading(false);
+        }
+      };
 
-  <ContentSpotlight
-    alt="Developer menu in Expo Go app."
-    src="/static/images/get-started/developer-menu.png"
-    className="max-w-[540px]"
-  />
+      initialSignIn();
 
-</Collapsible>
+      const unsubscribe = onAuthStateChanged(firebaseAuth, (user) => {
+        if (user) {
+          setUserId(user.uid);
+          console.log("Auth state changed, user ID:", user.uid);
+        } else {
+          setUserId(null);
+          console.log("Auth state changed, no user.");
+        }
+        setLoading(false);
+      });
 
-</Step>
+      return () => unsubscribe();
+    } catch (error) {
+      console.error("Firebase initialization failed:", error);
+      setAuthError(`Firebase initialization failed: ${error.message}`);
+      setLoading(false);
+    }
+  }, []);
 
----
+  const value = { db, auth, userId, loading, authError };
 
-## File structure
+  return (
+    <FirebaseContext.Provider value={value}>
+      {children}
+    </FirebaseContext.Provider>
+  );
+};
 
-Below, you can get familiar with the default project's file structure:
+// Custom hook to use Firebase context
+const useFirebase = () => useContext(FirebaseContext);
 
-<ProjectStructure />
+// --- Reusable Components ---
 
-## Features
+// Dashboard Card Component
+const DashboardCard = ({ title, value, icon, bgColor, textColor }) => (
+  <div className={`p-5 rounded-lg shadow-md border ${bgColor} ${textColor} flex items-center space-x-4`}>
+    <div className="text-4xl">{icon}</div>
+    <div>
+      <p className="text-sm font-medium">{title}</p>
+      <p className="text-3xl font-extrabold mt-1">{value}</p>
+    </div>
+  </div>
+);
 
-The default project template has the following features:
+// Generic Modal Component
+const Modal = ({ isOpen, onClose, title, children }) => {
+  if (!isOpen) return null;
 
-<TemplateFeatures />
+  return (
+    <div className="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center p-4 z-50">
+      <div className="bg-gray-800 p-6 rounded-lg shadow-xl w-full max-w-md border border-gray-700 text-white">
+        <div className="flex justify-between items-center mb-4">
+          <h4 className="text-xl font-bold">{title}</h4>
+          <button onClick={onClose} className="text-gray-400 hover:text-white text-2xl">&times;</button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+};
+
+// --- Custom Hooks for Data and LLM ---
+
+// Hook for Firestore Collection Data
+const useFirestoreCollection = (collectionName) => {
+  const { db, userId } = useFirebase();
+  const [data, setData] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    if (!db || !userId) {
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    const q = query(collection(db, `artifacts/${__app_id}/users/${userId}/${collectionName}`));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const fetchedData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setData(fetchedData);
+      setLoading(false);
+      setError(null);
+    }, (err) => {
+      console.error(`Error fetching ${collectionName}:`, err);
+      setError(`Failed to load ${collectionName}.`);
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [db, userId, collectionName]);
+
+  const addDocument = useCallback(async (docData) => {
+    if (!db || !userId) return;
+    try {
+      await addDoc(collection(db, `artifacts/${__app_id}/users/${userId}/${collectionName}`), {
+        ...docData,
+        createdAt: serverTimestamp(),
+        userId: userId
+      });
+      setError(null);
+    } catch (err) {
+      console.error(`Error adding document to ${collectionName}:`, err);
+      setError(`Failed to add item to ${collectionName}.`);
+    }
+  }, [db, userId, collectionName]);
+
+  const updateDocument = useCallback(async (id, updateData) => {
+    if (!db || !userId) return;
+    try {
+      await updateDoc(doc(db, `artifacts/${__app_id}/users/${userId}/${collectionName}`, id), {
+        ...updateData,
+        lastUpdated: serverTimestamp()
+      });
+      setError(null);
+    } catch (err) {
+      console.error(`Error updating document in ${collectionName}:`, err);
+      setError(`Failed to update item in ${collectionName}.`);
+    }
+  }, [db, userId, collectionName]);
+
+  const deleteDocument = useCallback(async (id) => {
+    if (!db || !userId) return;
+    try {
+      await deleteDoc(doc(db, `artifacts/${__app_id}/users/${userId}/${collectionName}`, id));
+      setError(null);
+    } catch (err) {
+      console.error(`Error deleting document from ${collectionName}:`, err);
+      setError(`Failed to delete item from ${collectionName}.`);
+    }
+  }, [db, userId, collectionName]);
+
+  return { data, loading, error, addDocument, updateDocument, deleteDocument };
+};
+
+// Hook for Gemini API Calls
+const useGeminiApi = () => {
+  const [response, setResponse] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const callApi = useCallback(async (prompt) => {
+    setLoading(true);
+    setResponse(null);
+    setError(null);
+
+    try {
+      let chatHistory = [];
+      chatHistory.push({ role: "user", parts: [{ text: prompt }] });
+      const payload = { contents: chatHistory };
+      const apiKey = ""; // Canvas will automatically provide it in runtime
+      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+
+      const fetchResponse = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      const result = await fetchResponse.json();
+      if (result.candidates && result.candidates.length > 0 &&
+          result.candidates[0].content && result.candidates[0].content.parts &&
+          result.candidates[0].content.parts.length > 0) {
+        const text = result.candidates[0].content.parts[0].text;
+        setResponse(text);
+      } else {
+        setError("Failed to get response from AI. Please try again.");
+        console.error("Gemini API response structure unexpected:", result);
+      }
+    } catch (llmError) {
+      console.error("Error calling Gemini API:", llmError);
+      setError("Error connecting to AI. Please check your network and try again.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  return { response, loading, error, callApi };
+};
+
+// --- Auth Component ---
+const Auth = ({ onLoginSuccess }) => {
+  const { auth, authError } = useFirebase();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [isLogin, setIsLogin] = useState(true);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+
+    try {
+      if (isLogin) {
+        await signInWithEmailAndPassword(auth, email, password);
+        console.log("User logged in successfully.");
+      } else {
+        await createUserWithEmailAndPassword(auth, email, password);
+        console.log("User registered successfully.");
+      }
+      onLoginSuccess();
+    } catch (err) {
+      console.error("Auth error:", err);
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-900 p-4">
+      <div className="bg-gray-800 p-8 rounded-lg shadow-lg w-full max-w-md border border-gray-700">
+        <h2 className="text-2xl font-bold mb-6 text-center text-white">
+          {isLogin ? 'Lab Staff Login' : 'Register New Staff'}
+        </h2>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-gray-300 text-sm font-bold mb-2" htmlFor="email">
+              Email:
+            </label>
+            <input
+              type="email"
+              id="email"
+              className="shadow appearance-none border border-gray-600 bg-gray-700 rounded w-full py-2 px-3 text-white leading-tight focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent rounded-md"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+            />
+          </div>
+          <div>
+            <label className="block text-gray-300 text-sm font-bold mb-2" htmlFor="password">
+              Password:
+            </label>
+            <input
+              type="password"
+              id="password"
+              className="shadow appearance-none border border-gray-600 bg-gray-700 rounded w-full py-2 px-3 text-white leading-tight focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent rounded-md"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+            />
+          </div>
+          {error && <p className="text-red-400 text-sm italic">{error}</p>}
+          {authError && <p className="text-red-400 text-sm italic">{authError}</p>}
+          <button
+            type="submit"
+            className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md w-full focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50 transition duration-200 ease-in-out"
+            disabled={loading}
+          >
+            {loading ? 'Processing...' : (isLogin ? 'Login' : 'Register')}
+          </button>
+        </form>
+        <button
+          onClick={() => setIsLogin(!isLogin)}
+          className="mt-4 text-blue-400 hover:text-blue-300 text-sm block w-full text-center"
+        >
+          {isLogin ? 'Need to register? Create an account' : 'Already have an account? Login'}
+        </button>
+      </div>
+    </div>
+  );
+};
+
+// --- Dashboard Component ---
+const Dashboard = () => {
+  const { data: samples, loading: samplesLoading, error: samplesError } = useFirestoreCollection('samples');
+  const { data: inventoryItems, loading: inventoryLoading, error: inventoryError } = useFirestoreCollection('inventory');
+  const { data: experiments, loading: experimentsLoading, error: experimentsError } = useFirestoreCollection('experiments');
+  const { data: staffMembers, loading: staffLoading, error: staffError } = useFirestoreCollection('staff');
+
+  const loading = samplesLoading || inventoryLoading || experimentsLoading || staffLoading;
+  const error = samplesError || inventoryError || experimentsError || staffError;
+
+  const stats = {
+    totalSamples: samples.length,
+    totalInventory: inventoryItems.length,
+    inStock: inventoryItems.filter(item => item.quantity > (item.minQuantity || 0)).length,
+    lowStock: inventoryItems.filter(item => item.quantity <= (item.minQuantity || 0) && item.quantity > 0).length,
+    outOfStock: inventoryItems.filter(item => item.quantity === 0).length,
+    totalExperiments: experiments.length,
+    experimentsInProgress: experiments.filter(exp => exp.status === 'InProgress').length,
+    experimentsCompleted: experiments.filter(exp => exp.status === 'Completed').length,
+    experimentsFailed: experiments.filter(exp => exp.status === 'Failed').length,
+    totalStaff: staffMembers.length,
+    researchers: staffMembers.filter(member => member.role === 'Researcher').length,
+    technicians: staffMembers.filter(member => member.role === 'Technician').length,
+    administrators: staffMembers.filter(member => member.role === 'Administrator').length,
+  };
+
+  const now = new Date();
+  const upcomingExperiments = experiments.filter(exp =>
+    exp.dueDate && exp.status !== 'Completed' && exp.status !== 'Failed' && parseISO(exp.dueDate) > now && (parseISO(exp.dueDate).getTime() - now.getTime() < 7 * 24 * 60 * 60 * 1000)
+  ).sort((a, b) => parseISO(a.dueDate).getTime() - parseISO(b.dueDate).getTime());
+
+  const overdueExperiments = experiments.filter(exp =>
+    exp.dueDate && exp.status !== 'Completed' && exp.status !== 'Failed' && isPast(parseISO(exp.dueDate)) && !isToday(parseISO(exp.dueDate))
+  ).sort((a, b) => parseISO(a.dueDate).getTime() - parseISO(b.dueDate).getTime());
+
+
+  if (loading) return <div className="text-center p-6 text-gray-300">Loading dashboard...</div>;
+  if (error) return <div className="text-center p-6 text-red-400">{error}</div>;
+
+  return (
+    <div className="p-6 bg-gray-800 rounded-lg shadow-lg">
+      <h3 className="text-2xl font-bold mb-6 text-white">Dashboard Overview</h3>
+
+      {/* Inventory Stats */}
+      <h4 className="text-xl font-semibold mb-4 text-white">Inventory Summary</h4>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+        <DashboardCard title="Total Items" value={stats.totalInventory} icon="📦" bgColor="bg-blue-900" textColor="text-blue-200" />
+        <DashboardCard title="In Stock" value={stats.inStock} icon="✅" bgColor="bg-green-900" textColor="text-green-200" />
+        <DashboardCard title="Low Stock" value={stats.lowStock} icon="⚠️" bgColor="bg-yellow-900" textColor="text-yellow-200" />
+        <DashboardCard title="Out of Stock" value={stats.outOfStock} icon="❌" bgColor="bg-red-900" textColor="text-red-200" />
+      </div>
+
+      {/* Experiments Stats */}
+      <h4 className="text-xl font-semibold mb-4 text-white">Experiment Summary</h4>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+        <DashboardCard title="Total Experiments" value={stats.totalExperiments} icon="🔬" bgColor="bg-indigo-900" textColor="text-indigo-200" />
+        <DashboardCard title="In Progress" value={stats.experimentsInProgress} icon="⏳" bgColor="bg-blue-900" textColor="text-blue-200" />
+        <DashboardCard title="Completed" value={stats.experimentsCompleted} icon="🏆" bgColor="bg-green-900" textColor="text-green-200" />
+        <DashboardCard title="Failed" value={stats.experimentsFailed} icon="🔥" bgColor="bg-red-900" textColor="text-red-200" />
+      </div>
+
+      {/* Staff Stats */}
+      <h4 className="text-xl font-semibold mb-4 text-white">Staff Summary</h4>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+        <DashboardCard title="Total Staff" value={stats.totalStaff} icon="👥" bgColor="bg-purple-900" textColor="text-purple-200" />
+        <DashboardCard title="Researchers" value={stats.researchers} icon="🧠" bgColor="bg-gray-900" textColor="text-gray-200" />
+        <DashboardCard title="Technicians" value={stats.technicians} icon="🔧" bgColor="bg-gray-900" textColor="text-gray-200" />
+        <DashboardCard title="Administrators" value={stats.administrators} icon="👑" bgColor="bg-gray-900" textColor="text-gray-200" />
+      </div>
+
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="bg-gray-900 p-5 rounded-lg shadow-sm border border-gray-700">
+          <h4 className="text-xl font-semibold mb-4 text-white">Upcoming Experiments (Next 7 Days)</h4>
+          {upcomingExperiments.length === 0 ? (
+            <p className="text-gray-400">No upcoming experiments.</p>
+          ) : (
+            <ul className="space-y-3">
+              {upcomingExperiments.map(exp => (
+                <li key={exp.id} className="bg-gray-800 p-3 rounded-md border border-gray-700">
+                  <p className="font-medium text-blue-300">{exp.title}</p>
+                  <p className="text-sm text-gray-400">Due: {format(parseISO(exp.dueDate), 'MMM dd,yyyy')}</p>
+                  <p className="text-xs text-gray-500">Responsible: {exp.responsibleStaffName}</p>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <div className="bg-gray-900 p-5 rounded-lg shadow-sm border border-gray-700">
+          <h4 className="text-xl font-semibold mb-4 text-white">Overdue Experiments</h4>
+          {overdueExperiments.length === 0 ? (
+            <p className="text-gray-400">No overdue experiments.</p>
+          ) : (
+            <ul className="space-y-3">
+              {overdueExperiments.map(exp => (
+                <li key={exp.id} className="bg-red-900 p-3 rounded-md border border-red-700">
+                  <p className="font-medium text-red-300">{exp.title}</p>
+                  <p className="text-sm text-red-400">Due: {format(parseISO(exp.dueDate), 'MMM dd,yyyy')}</p>
+                  <p className="text-xs text-red-500">Responsible: {exp.responsibleStaffName}</p>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Sample Tracking Component
+const SampleTracking = () => {
+  const { data: samples, loading, error, addDocument, updateDocument, deleteDocument } = useFirestoreCollection('samples');
+  const { response: analysisSummary, loading: analysisLoading, error: analysisError, callApi: callAnalysisApi } = useGeminiApi();
+
+  const [newSampleName, setNewSampleName] = useState('');
+  const [newSampleType, setNewSampleType] = useState('');
+  const [showAnalysisModal, setShowAnalysisModal] = useState(false);
+  const [sampleAnalysisInput, setSampleAnalysisInput] = useState('');
+
+  const handleAddSample = async () => {
+    if (!newSampleName || !newSampleType) return;
+    await addDocument({ name: newSampleName, type: newSampleType, status: 'Received' });
+    setNewSampleName('');
+    setNewSampleType('');
+  };
+
+  const handleUpdateSampleStatus = async (id, currentStatus) => {
+    const newStatus = currentStatus === 'Received' ? 'Processing' : (currentStatus === 'Processing' ? 'Completed' : 'Received');
+    await updateDocument(id, { status: newStatus });
+  };
+
+  const handleDeleteSample = async (id) => {
+    await deleteDocument(id);
+  };
+
+  const handleGetAnalysisSummary = async () => {
+    if (!sampleAnalysisInput.trim()) {
+      // Set error via useGeminiApi's setError
+      callAnalysisApi("Please provide some sample data or observations to summarize.");
+      return;
+    }
+    const prompt = `Summarize and provide a preliminary interpretation of the following lab sample data/observations. Highlight any key findings or anomalies:\n\n${sampleAnalysisInput.trim()}`;
+    await callAnalysisApi(prompt);
+  };
+
+
+  if (loading) return <div className="text-center p-4 text-gray-300">Loading samples...</div>;
+  if (error) return <div className="text-center p-4 text-red-400">{error}</div>;
+
+  return (
+    <div className="p-6 bg-gray-800 rounded-lg shadow-lg">
+      <h3 className="text-xl font-semibold mb-4 text-white">Sample Tracking</h3>
+      <div className="mb-4 flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-2">
+        <input
+          type="text"
+          placeholder="Sample Name"
+          value={newSampleName}
+          onChange={(e) => setNewSampleName(e.target.value)}
+          className="flex-1 p-2 border border-gray-600 bg-gray-700 text-white rounded-md focus:ring-blue-500 focus:border-blue-500"
+        />
+        <input
+          type="text"
+          placeholder="Sample Type (e.g., Blood, Water)"
+          value={newSampleType}
+          onChange={(e) => setNewSampleType(e.target.value)}
+          className="flex-1 p-2 border border-gray-600 bg-gray-700 text-white rounded-md focus:ring-blue-500 focus:border-blue-500"
+        />
+        <button
+          onClick={handleAddSample}
+          className="bg-green-600 hover:bg-green-700 text-white py-2 px-4 rounded-md transition duration-200"
+        >
+          Add Sample
+        </button>
+      </div>
+      <div className="mb-4">
+        <button
+          onClick={() => { setShowAnalysisModal(true); setSampleAnalysisInput(''); callAnalysisApi(null); }} // Clear previous input and output
+          className="bg-purple-600 hover:bg-purple-700 text-white py-2 px-4 rounded-md transition duration-200 flex items-center space-x-2"
+        >
+          ✨ Sample Analysis Summary
+        </button>
+      </div>
+
+      {samples.length === 0 ? (
+        <p className="text-gray-400">No samples tracked yet.</p>
+      ) : (
+        <ul className="space-y-3">
+          {samples.map((sample) => (
+            <li key={sample.id} className="flex flex-col sm:flex-row items-start sm:items-center justify-between bg-gray-700 p-3 rounded-md border border-gray-600 text-white">
+              <div className="mb-2 sm:mb-0">
+                <p className="font-medium">{sample.name} ({sample.type})</p>
+                <p className="text-sm text-gray-400">Status: {sample.status}</p>
+                <p className="text-xs text-gray-500">Added: {sample.createdAt ? format(sample.createdAt.toDate(), 'MMM dd,yyyy HH:mm') : 'N/A'}</p>
+              </div>
+              <div className="flex space-x-2">
+                <button
+                  onClick={() => handleUpdateSampleStatus(sample.id, sample.status)}
+                  className="bg-blue-600 hover:bg-blue-700 text-white text-sm py-1 px-3 rounded-md transition duration-200"
+                >
+                  Update Status
+                </button>
+                <button
+                  onClick={() => handleDeleteSample(sample.id)}
+                  className="bg-red-600 hover:bg-red-700 text-white text-sm py-1 px-3 rounded-md transition duration-200"
+                >
+                  Delete
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <Modal isOpen={showAnalysisModal} onClose={() => setShowAnalysisModal(false)} title="Sample Analysis Summary">
+        <div className="flex flex-col space-y-4">
+          <textarea
+            placeholder="Enter sample data or observations for analysis (e.g., 'pH 7.2, high protein content, cloudy appearance')..."
+            value={sampleAnalysisInput}
+            onChange={(e) => setSampleAnalysisInput(e.target.value)}
+            rows="5"
+            className="w-full p-2 border border-gray-600 bg-gray-700 text-white rounded-md focus:ring-blue-500 focus:border-blue-500"
+          ></textarea>
+          <button
+            onClick={handleGetAnalysisSummary}
+            className="bg-purple-600 hover:bg-purple-700 text-white py-2 px-4 rounded-md transition duration-200 flex items-center justify-center space-x-2"
+            disabled={analysisLoading}
+          >
+            {analysisLoading ? (
+              <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+            ) : (
+              '✨ Get Summary'
+            )}
+          </button>
+          {analysisSummary && (
+            <div className="bg-gray-700 p-3 rounded-md border border-gray-600">
+              <h5 className="text-md font-semibold text-white mb-1">AI Analysis:</h5>
+              <p className="text-gray-300 whitespace-pre-wrap text-sm">{analysisSummary}</p>
+            </div>
+          )}
+          {analysisError && <p className="text-red-400 text-sm italic">{analysisError}</p>}
+        </div>
+      </Modal>
+    </div>
+  );
+};
+
+// Inventory Management Component
+const InventoryManagement = () => {
+  const { data: inventoryItems, loading, error, addDocument, updateDocument, deleteDocument } = useFirestoreCollection('inventory');
+  const { response: llmSuggestion, loading: llmSuggestionLoading, error: llmError, callApi: callLlmApi } = useGeminiApi();
+  const [showAddItemModal, setShowAddItemModal] = useState(false);
+  const [newItem, setNewItem] = useState({
+    itemName: '', category: '', storageLocation: '', quantity: 0, unit: '',
+    supplier: '', catalogNumber: '', dateReceived: format(new Date(), 'yyyy-MM-dd'),
+    expirationDate: '', minQuantity: 0, notes: ''
+  });
+
+  const categories = ["Reagent", "Consumable", "Chemical", "Media", "Equipment", "Other"];
+  const units = ["units", "boxes", "liters", "grams", "ml", "pieces"];
+
+  const handleNewItemChange = (e) => {
+    const { name, value, type } = e.target;
+    setNewItem(prev => ({
+      ...prev,
+      [name]: type === 'number' ? parseInt(value, 10) : value
+    }));
+  };
+
+  const handleAddItem = async () => {
+    if (!newItem.itemName || !newItem.category || !newItem.quantity) {
+      setError("Please fill required fields (Item Name, Category, Quantity).");
+      return;
+    }
+    setError(null);
+    await addDocument(newItem);
+    setNewItem({
+      itemName: '', category: '', storageLocation: '', quantity: 0, unit: '',
+      supplier: '', catalogNumber: '', dateReceived: format(new Date(), 'yyyy-MM-dd'),
+      expirationDate: '', minQuantity: 0, notes: ''
+    });
+    setShowAddItemModal(false);
+  };
+
+  const handleUpdateQuantity = async (id, currentQuantity, change) => {
+    const newQuantity = currentQuantity + change;
+    if (newQuantity < 0) return;
+    await updateDocument(id, { quantity: newQuantity });
+  };
+
+  const handleDeleteItem = async (id) => {
+    await deleteDocument(id);
+  };
+
+  const handleGetReorderSuggestions = async () => {
+    const lowStockItems = inventoryItems.filter(item => item.quantity <= (item.minQuantity || 0) && item.quantity > 0);
+    const outOfStockItems = inventoryItems.filter(item => item.quantity === 0);
+
+    if (lowStockItems.length === 0 && outOfStockItems.length === 0) {
+      callLlmApi("No items are currently low or out of stock."); // Use callLlmApi to set response
+      return;
+    }
+
+    let prompt = "Suggest reordering strategies and potential suppliers for the following lab inventory items:\n\n";
+    if (outOfStockItems.length > 0) {
+      prompt += "Out of Stock:\n";
+      outOfStockItems.forEach(item => {
+        prompt += `- ${item.itemName} (Category: ${item.category || 'N/A'})\n`;
+      });
+    }
+    if (lowStockItems.length > 0) {
+      prompt += "\nLow Stock:\n";
+      lowStockItems.forEach(item => {
+        prompt += `- ${item.itemName} (Current Quantity: ${item.quantity} ${item.unit || ''}, Min Quantity: ${item.minQuantity || 'N/A'}, Category: ${item.category || 'N/A'})\n`;
+      });
+    }
+    prompt += "\nConsider general lab suppliers and common alternatives. Provide a concise, actionable summary.";
+
+    await callLlmApi(prompt);
+  };
+
+
+  if (loading) return <div className="text-center p-4 text-gray-300">Loading inventory...</div>;
+  if (error) return <div className="text-center p-4 text-red-400">{error}</div>;
+
+  return (
+    <div className="p-6 bg-gray-800 rounded-lg shadow-lg">
+      <h3 className="text-xl font-semibold mb-4 text-white">Inventory Management</h3>
+      <div className="mb-4 flex justify-between items-center">
+        <button
+          onClick={handleGetReorderSuggestions}
+          className="bg-purple-600 hover:bg-purple-700 text-white py-2 px-4 rounded-md transition duration-200 flex items-center space-x-2"
+          disabled={llmSuggestionLoading}
+        >
+          {llmSuggestionLoading ? (
+            <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+          ) : (
+            '✨'
+          )}
+          <span>Reorder Suggestions</span>
+        </button>
+        <button
+          onClick={() => setShowAddItemModal(true)}
+          className="bg-blue-600 hover:bg-blue-700 text-white py-2 px-4 rounded-md transition duration-200"
+        >
+          + New Item
+        </button>
+      </div>
+
+      {llmSuggestion && (
+        <div className="bg-gray-700 p-4 rounded-md mb-4 border border-gray-600">
+          <h4 className="text-lg font-semibold text-white mb-2">AI Reorder Suggestions:</h4>
+          <p className="text-gray-300 whitespace-pre-wrap">{llmSuggestion}</p>
+        </div>
+      )}
+      {llmError && <p className="text-red-400 text-sm italic mb-4">{llmError}</p>}
+
+      {inventoryItems.length === 0 ? (
+        <p className="text-gray-400">No inventory items yet.</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="min-w-full bg-gray-900 border border-gray-700 rounded-md text-white">
+            <thead className="bg-gray-700">
+              <tr>
+                <th className="py-2 px-4 border-b border-gray-600 text-left text-sm font-semibold text-gray-300">ID</th>
+                <th className="py-2 px-4 border-b border-gray-600 text-left text-sm font-semibold text-gray-300">Name</th>
+                <th className="py-2 px-4 border-b border-gray-600 text-left text-sm font-semibold text-gray-300">Category</th>
+                <th className="py-2 px-4 border-b border-gray-600 text-left text-sm font-semibold text-gray-300">Location</th>
+                <th className="py-2 px-4 border-b border-gray-600 text-left text-sm font-semibold text-gray-300">Quantity</th>
+                <th className="py-2 px-4 border-b border-gray-600 text-left text-sm font-semibold text-gray-300">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {inventoryItems.map((item) => (
+                <tr key={item.id} className="hover:bg-gray-700 border-b border-gray-600">
+                  <td className="py-2 px-4 text-sm text-gray-300">{item.id.substring(0, 6)}</td>
+                  <td className="py-2 px-4 text-sm text-white font-medium">{item.itemName}</td>
+                  <td className="py-2 px-4 text-sm text-gray-300">{item.category}</td>
+                  <td className="py-2 px-4 text-sm text-gray-300">{item.storageLocation}</td>
+                  <td className="py-2 px-4 text-sm text-gray-300">{item.quantity} {item.unit}</td>
+                  <td className="py-2 px-4 text-sm">
+                    <div className="flex space-x-2">
+                      <button
+                        onClick={() => handleUpdateQuantity(item.id, item.quantity, 1)}
+                        className="bg-blue-600 hover:bg-blue-700 text-white text-xs py-1 px-2 rounded-md transition duration-200"
+                      >
+                        +
+                      </button>
+                      <button
+                        onClick={() => handleUpdateQuantity(item.id, item.quantity, -1)}
+                        className="bg-yellow-600 hover:bg-yellow-700 text-white text-xs py-1 px-2 rounded-md transition duration-200"
+                      >
+                        -
+                      </button>
+                      <button
+                        onClick={() => handleDeleteItem(item.id)}
+                        className="bg-red-600 hover:bg-red-700 text-white text-xs py-1 px-2 rounded-md transition duration-200"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Add Item Modal */}
+      <Modal isOpen={showAddItemModal} onClose={() => setShowAddItemModal(false)} title="Add New Inventory Item">
+        <form onSubmit={(e) => { e.preventDefault(); handleAddItem(); }} className="grid grid-cols-2 gap-4">
+          <div className="col-span-2">
+            <label className="block text-sm font-medium text-gray-300 mb-1">Item Name *</label>
+            <input type="text" name="itemName" value={newItem.itemName} onChange={handleNewItemChange}
+                    className="w-full p-2 border border-gray-600 bg-gray-700 rounded-md focus:ring-blue-500 focus:border-blue-500" required />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-1">Category *</label>
+            <select name="category" value={newItem.category} onChange={handleNewItemChange}
+                    className="w-full p-2 border border-gray-600 bg-gray-700 rounded-md focus:ring-blue-500 focus:border-blue-500" required>
+              <option value="">Select category</option>
+              {categories.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-1">Storage Location *</label>
+            <input type="text" name="storageLocation" value={newItem.storageLocation} onChange={handleNewItemChange}
+                    className="w-full p-2 border border-gray-600 bg-gray-700 rounded-md focus:ring-blue-500 focus:border-blue-500" required />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-1">Quantity *</label>
+            <input type="number" name="quantity" value={newItem.quantity} onChange={handleNewItemChange}
+                    className="w-full p-2 border border-gray-600 bg-gray-700 rounded-md focus:ring-blue-500 focus:border-blue-500" required />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-1">Unit *</label>
+            <select name="unit" value={newItem.unit} onChange={handleNewItemChange}
+                    className="w-full p-2 border border-gray-600 bg-gray-700 rounded-md focus:ring-blue-500 focus:border-blue-500" required>
+              <option value="">e.g., boxes,</option>
+              {units.map(unit => <option key={unit} value={unit}>{unit}</option>)}
+            </select>
+          </div>
+          <div className="col-span-2">
+            <label className="block text-sm font-medium text-gray-300 mb-1">Supplier</label>
+            <input type="text" name="supplier" value={newItem.supplier} onChange={handleNewItemChange}
+                    className="w-full p-2 border border-gray-600 bg-gray-700 rounded-md focus:ring-blue-500 focus:border-blue-500" />
+          </div>
+          <div className="col-span-2">
+            <label className="block text-sm font-medium text-gray-300 mb-1">Catalog Number</label>
+            <input type="text" name="catalogNumber" value={newItem.catalogNumber} onChange={handleNewItemChange}
+                    className="w-full p-2 border border-gray-600 bg-gray-700 rounded-md focus:ring-blue-500 focus:border-blue-500" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-1">Date Received *</label>
+            <input type="date" name="dateReceived" value={newItem.dateReceived} onChange={handleNewItemChange}
+                    className="w-full p-2 border border-gray-600 bg-gray-700 rounded-md focus:ring-blue-500 focus:border-blue-500" required />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-1">Expiration Date</label>
+            <input type="date" name="expirationDate" value={newItem.expirationDate} onChange={handleNewItemChange}
+                    className="w-full p-2 border border-gray-600 bg-gray-700 rounded-md focus:ring-blue-500 focus:border-blue-500" />
+          </div>
+          <div className="col-span-2">
+            <label className="block text-sm font-medium text-gray-300 mb-1">Min. Quantity</label>
+            <input type="number" name="minQuantity" value={newItem.minQuantity} onChange={handleNewItemChange}
+                    className="w-full p-2 border border-gray-600 bg-gray-700 rounded-md focus:ring-blue-500 focus:border-blue-500" />
+          </div>
+          <div className="col-span-2">
+            <label className="block text-sm font-medium text-gray-300 mb-1">Notes</label>
+            <textarea name="notes" value={newItem.notes} onChange={handleNewItemChange} rows="3"
+                      className="w-full p-2 border border-gray-600 bg-gray-700 rounded-md focus:ring-blue-500 focus:border-blue-500"></textarea>
+          </div>
+          {error && <p className="col-span-2 text-red-400 text-sm italic">{error}</p>}
+          <div className="col-span-2 flex space-x-2">
+            <button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md flex-1 transition duration-200">
+              Add Item
+            </button>
+            <button type="button" onClick={() => setShowAddItemModal(false)} className="bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded-md flex-1 transition duration-200">
+              Cancel
+            </button>
+          </div>
+        </form>
+      </Modal>
+    </div>
+  );
+};
+
+// Experiments Component
+const Experiments = () => {
+  const { data: experiments, loading, error, addDocument, updateDocument, deleteDocument } = useFirestoreCollection('experiments');
+  const { response: protocolSuggestion, loading: protocolLoading, error: protocolError, callApi: callProtocolApi } = useGeminiApi();
+  const { response: troubleshootSuggestion, loading: troubleshootLoading, error: troubleshootError, callApi: callTroubleshootApi } = useGeminiApi();
+
+  const [newExperiment, setNewExperiment] = useState({
+    title: '',
+    project: '',
+    startDate: format(new Date(), 'yyyy-MM-dd'),
+    description: '',
+    responsibleStaffName: '',
+    dueDate: '',
+  });
+  const [showNotesModal, setShowNotesModal] = useState(false);
+  const [currentExperimentNotes, setCurrentExperimentNotes] = useState([]);
+  const [currentExperimentId, setCurrentExperimentId] = useState(null);
+  const [newNoteText, setNewNoteText] = useState('');
+
+  const handleNewExperimentChange = (e) => {
+    const { name, value } = e.target;
+    setNewExperiment(prev => ({ ...prev, [name]: value }));
+  };
+
+  const handleAddExperiment = async () => {
+    if (!newExperiment.title || !newExperiment.project || !newExperiment.startDate) {
+      setError("Please fill required fields (Title, Project, Start Date).");
+      return;
+    }
+    setError(null);
+    await addDocument({
+      ...newExperiment,
+      status: 'Planning',
+      isCompleted: false,
+      isFailed: false,
+      completionDate: null,
+      notes: [],
+    });
+    setNewExperiment({ title: '', project: '', startDate: format(new Date(), 'yyyy-MM-dd'), description: '', responsibleStaffName: '', dueDate: '' });
+  };
+
+  const handleUpdateExperimentStatus = async (id, currentStatus) => {
+    let newStatus = currentStatus;
+    let isCompleted = false;
+    let isFailed = false;
+    let completionDate = null;
+
+    if (currentStatus === 'Planning') {
+      newStatus = 'InProgress';
+    } else if (currentStatus === 'InProgress') {
+      newStatus = 'Completed';
+      isCompleted = true;
+      completionDate = serverTimestamp();
+    } else if (currentStatus === 'Completed') {
+      newStatus = 'Failed';
+      isFailed = true;
+      completionDate = serverTimestamp();
+    } else if (currentStatus === 'Failed') {
+      newStatus = 'Planning';
+      isFailed = false;
+    }
+    await updateDocument(id, { status: newStatus, isCompleted: isCompleted, isFailed: isFailed, completionDate: completionDate });
+  };
+
+  const handleDeleteExperiment = async (id) => {
+    await deleteDocument(id);
+  };
+
+  const openNotesModal = (experiment) => {
+    setCurrentExperimentNotes(experiment.notes || []);
+    setCurrentExperimentId(experiment.id);
+    setNewNoteText('');
+    setShowNotesModal(true);
+    // Clear previous LLM suggestions when opening modal for a new experiment
+    if (troubleshootSuggestion) callTroubleshootApi(null); // Clear LLM response
+  };
+
+  const handleAddNoteToExperiment = async () => {
+    if (!currentExperimentId || !newNoteText.trim()) return;
+    const experimentRef = doc(db, `artifacts/${__app_id}/users/${userId}/experiments`, currentExperimentId);
+    const experimentSnap = await getDoc(experimentRef);
+    if (experimentSnap.exists()) {
+      const existingNotes = experimentSnap.data().notes || [];
+      const updatedNotes = [...existingNotes, { text: newNoteText.trim(), timestamp: serverTimestamp() }];
+      await updateDocument(currentExperimentId, { notes: updatedNotes });
+      setCurrentExperimentNotes(updatedNotes);
+      setNewNoteText('');
+    }
+  };
+
+  const handleGenerateProtocol = async () => {
+    if (!newExperiment.title) {
+      setError("Please enter an Experiment Title to generate a protocol.");
+      return;
+    }
+    setError(null);
+    const prompt = `Generate a concise lab experiment protocol for an experiment titled "${newExperiment.title}".
+    ${newExperiment.description ? `The experiment description is: "${newExperiment.description}".` : ''}
+    Include sections for Objective, Materials, Methods (brief steps), and Expected Outcome. Keep it professional and to the point.`;
+    await callProtocolApi(prompt);
+  };
+
+  useEffect(() => {
+    if (protocolSuggestion) {
+      setNewExperiment(prev => ({ ...prev, description: protocolSuggestion }));
+    }
+  }, [protocolSuggestion]);
+
+  const handleGetTroubleshootingSuggestion = async () => {
+    if (!newNoteText.trim()) {
+      setError("Please describe the issue in the note field to get troubleshooting suggestions.");
+      return;
+    }
+    setError(null);
+    const prompt = `I am experiencing an issue in a lab experiment. The issue is: "${newNoteText.trim()}".
+    Suggest potential causes and troubleshooting steps. Keep it concise and actionable for a lab setting.`;
+    await callTroubleshootApi(prompt);
+  };
+
+  if (loading) return <div className="text-center p-4 text-gray-300">Loading experiments...</div>;
+  if (error) return <div className="text-center p-4 text-red-400">{error}</div>;
+
+  return (
+    <div className="p-6 bg-gray-800 rounded-lg shadow-lg">
+      <h3 className="text-xl font-semibold mb-4 text-white">Experiments Registry & Tracking</h3>
+      <div className="mb-6 p-4 border border-blue-700 bg-blue-900 rounded-md text-white">
+        <h4 className="text-lg font-semibold mb-3">Add New Experiment</h4>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+          <input
+            type="text"
+            name="title"
+            placeholder="Experiment Title"
+            value={newExperiment.title}
+            onChange={handleNewExperimentChange}
+            className="p-2 border border-gray-600 bg-gray-700 text-white rounded-md focus:ring-blue-500 focus:border-blue-500"
+          />
+          <input
+            type="text"
+            name="project"
+            placeholder="Project Name"
+            value={newExperiment.project}
+            onChange={handleNewExperimentChange}
+            className="p-2 border border-gray-600 bg-gray-700 text-white rounded-md focus:ring-blue-500 focus:border-blue-500"
+          />
+          <input
+            type="text"
+            name="responsibleStaffName"
+            placeholder="Responsible Staff Name"
+            value={newExperiment.responsibleStaffName}
+            onChange={handleNewExperimentChange}
+            className="p-2 border border-gray-600 bg-gray-700 text-white rounded-md focus:ring-blue-500 focus:border-blue-500"
+          />
+          <div>
+            <label htmlFor="startDate" className="block text-sm font-medium text-gray-300 mb-1">Start Date:</label>
+            <input
+              type="date"
+              name="startDate"
+              id="startDate"
+              value={newExperiment.startDate}
+              onChange={handleNewExperimentChange}
+              className="p-2 border border-gray-600 bg-gray-700 text-white rounded-md focus:ring-blue-500 focus:border-blue-500 w-full"
+            />
+          </div>
+          <div className="col-span-full">
+            <label htmlFor="dueDate" className="block text-sm font-medium text-gray-300 mb-1">Due Date (Optional):</label>
+            <input
+              type="date"
+              name="dueDate"
+              id="dueDate"
+              value={newExperiment.dueDate}
+              onChange={handleNewExperimentChange}
+              className="p-2 border border-gray-600 bg-gray-700 text-white rounded-md focus:ring-blue-500 focus:border-blue-500 w-full"
+            />
+          </div>
+          <div className="col-span-full">
+            <label htmlFor="description" className="block text-sm font-medium text-gray-300 mb-1">Description / Protocol:</label>
+            <textarea
+              name="description"
+              placeholder="Experiment Description / Protocol (Optional)"
+              value={newExperiment.description}
+              onChange={handleNewExperimentChange}
+              rows="5"
+              className="p-2 border border-gray-600 bg-gray-700 text-white rounded-md focus:ring-blue-500 focus:border-blue-500 w-full"
+            ></textarea>
+            <button
+              onClick={handleGenerateProtocol}
+              className="mt-2 bg-purple-600 hover:bg-purple-700 text-white py-1 px-3 rounded-md text-sm transition duration-200 flex items-center space-x-1"
+              disabled={protocolLoading}
+            >
+              {protocolLoading ? (
+                <svg className="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+              ) : (
+                '✨'
+              )}
+              <span>Generate Protocol</span>
+            </button>
+          </div>
+        </div>
+        {error && <p className="text-red-400 text-sm italic mb-2">{error}</p>}
+        {protocolError && <p className="text-red-400 text-sm italic mb-2">{protocolError}</p>}
+        <button
+          onClick={handleAddExperiment}
+          className="bg-blue-600 hover:bg-blue-700 text-white py-2 px-4 rounded-md w-full transition duration-200"
+        >
+          Register Experiment
+        </button>
+      </div>
+
+      {experiments.length === 0 ? (
+        <p className="text-gray-400">No experiments defined yet.</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="min-w-full bg-gray-900 border border-gray-700 rounded-md text-white">
+            <thead className="bg-gray-700">
+              <tr>
+                <th className="py-2 px-4 border-b border-gray-600 text-left text-sm font-semibold text-gray-300">ID</th>
+                <th className="py-2 px-4 border-b border-gray-600 text-left text-sm font-semibold text-gray-300">Title</th>
+                <th className="py-2 px-4 border-b border-gray-600 text-left text-sm font-semibold text-gray-300">Project</th>
+                <th className="py-2 px-4 border-b border-gray-600 text-left text-sm font-semibold text-gray-300">Start Date</th>
+                <th className="py-2 px-4 border-b border-gray-600 text-left text-sm font-semibold text-gray-300">Due Date</th>
+                <th className="py-2 px-4 border-b border-gray-600 text-left text-sm font-semibold text-gray-300">Responsible</th>
+                <th className="py-2 px-4 border-b border-gray-600 text-left text-sm font-semibold text-gray-300">Status</th>
+                <th className="py-2 px-4 border-b border-gray-600 text-left text-sm font-semibold text-gray-300">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {experiments.map((exp) => (
+                <tr key={exp.id} className="hover:bg-gray-700 border-b border-gray-600">
+                  <td className="py-2 px-4 text-sm text-gray-300">{exp.id.substring(0, 6)}</td>
+                  <td className="py-2 px-4 text-sm text-white font-medium">{exp.title}</td>
+                  <td className="py-2 px-4 text-sm text-gray-300">{exp.project}</td>
+                  <td className="py-2 px-4 text-sm text-gray-300">
+                    {exp.startDate ? format(parseISO(exp.startDate), 'MMM dd,yyyy') : 'N/A'}
+                  </td>
+                  <td className="py-2 px-4 text-sm text-gray-300">
+                    {exp.dueDate ? format(parseISO(exp.dueDate), 'MMM dd,yyyy') : 'N/A'}
+                  </td>
+                  <td className="py-2 px-4 text-sm text-gray-300">{exp.responsibleStaffName}</td>
+                  <td className="py-2 px-4 text-sm">
+                    <span className={`px-2 py-1 rounded-full text-xs font-semibold ${
+                      exp.status === 'Planning' ? 'bg-yellow-800 text-yellow-200' :
+                      exp.status === 'InProgress' ? 'bg-blue-800 text-blue-200' :
+                      exp.status === 'Completed' ? 'bg-green-800 text-green-200' :
+                      'bg-red-800 text-red-200'
+                    }`}>
+                      {exp.status}
+                    </span>
+                  </td>
+                  <td className="py-2 px-4 text-sm">
+                    <div className="flex space-x-2">
+                      <button
+                        onClick={() => handleUpdateExperimentStatus(exp.id, exp.status)}
+                        className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs py-1 px-2 rounded-md transition duration-200"
+                      >
+                        Change Status
+                      </button>
+                      <button
+                        onClick={() => openNotesModal(exp)}
+                        className="bg-gray-600 hover:bg-gray-700 text-white text-xs py-1 px-2 rounded-md transition duration-200"
+                      >
+                        Notes ({exp.notes ? exp.notes.length : 0})
+                      </button>
+                      <button
+                        onClick={() => handleDeleteExperiment(exp.id)}
+                        className="bg-red-600 hover:bg-red-700 text-white text-xs py-1 px-2 rounded-md transition duration-200"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Notes Modal */}
+      <Modal isOpen={showNotesModal} onClose={() => setShowNotesModal(false)} title="Experiment Notes">
+        <div className="max-h-60 overflow-y-auto mb-4 border border-gray-600 p-3 rounded-md bg-gray-700">
+          {currentExperimentNotes.length === 0 ? (
+            <p className="text-gray-400 text-sm">No notes for this experiment yet.</p>
+          ) : (
+            <ul className="space-y-2">
+              {currentExperimentNotes.map((note, index) => (
+                <li key={index} className="text-sm text-gray-300 border-b border-gray-600 pb-2 last:border-b-0">
+                  {note.text}
+                  <p className="text-xs text-gray-500 mt-1">
+                    {note.timestamp ? format(note.timestamp.toDate(), 'MMM dd,yyyy HH:mm') : 'N/A'}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        <div className="flex flex-col space-y-2 mb-4">
+          <textarea
+            placeholder="Add a new note..."
+            value={newNoteText}
+            onChange={(e) => setNewNoteText(e.target.value)}
+            rows="2"
+            className="w-full p-2 border border-gray-600 bg-gray-700 text-white rounded-md focus:ring-blue-500 focus:border-blue-500"
+          ></textarea>
+          <div className="flex space-x-2">
+            <button
+              onClick={handleAddNoteToExperiment}
+              className="bg-green-600 hover:bg-green-700 text-white py-2 px-4 rounded-md transition duration-200 flex-1"
+            >
+              Add Note
+            </button>
+            <button
+              onClick={handleGetTroubleshootingSuggestion}
+              className="bg-purple-600 hover:bg-purple-700 text-white py-2 px-4 rounded-md transition duration-200 flex items-center justify-center space-x-1 flex-1"
+              disabled={troubleshootLoading}
+            >
+              {troubleshootLoading ? (
+                <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+              ) : (
+                '✨'
+              )}
+              <span>Troubleshoot Issue</span>
+            </button>
+          </div>
+        </div>
+        {troubleshootSuggestion && (
+          <div className="bg-gray-700 p-3 rounded-md mb-4 border border-gray-600">
+            <h5 className="text-md font-semibold text-white mb-1">AI Troubleshooting Suggestion:</h5>
+            <p className="text-gray-300 whitespace-pre-wrap text-sm">{troubleshootSuggestion}</p>
+          </div>
+        )}
+        {troubleshootError && <p className="text-red-400 text-sm italic mb-4">{troubleshootError}</p>}
+      </Modal>
+    </div>
+  );
+};
+
+// Staff Management Component
+const StaffManagement = () => {
+  const { data: staffMembers, loading, error, addDocument, deleteDocument } = useFirestoreCollection('staff');
+  const { response: trainingMaterial, loading: trainingLoading, error: trainingError, callApi: callTrainingApi } = useGeminiApi();
+
+  const [showAddStaffModal, setShowAddStaffModal] = useState(false);
+  const [newStaff, setNewStaff] = useState({
+    fullName: '', role: '', department: '', specialization: '', qualification: '',
+    email: '', phoneNumber: '', joinDate: format(new Date(), 'yyyy-MM-dd'), address: '', notes: ''
+  });
+  const [showTrainingModal, setShowTrainingModal] = useState(false);
+  const [trainingTopic, setTrainingTopic] = useState('');
+
+  const roles = ["Researcher", "Technician", "Administrator", "Lab Manager", "Intern", "Other"];
+
+  const handleNewStaffChange = (e) => {
+    const { name, value } = e.target;
+    setNewStaff(prev => ({ ...prev, [name]: value }));
+  };
+
+  const handleAddStaffMember = async () => {
+    if (!newStaff.fullName || !newStaff.role || !newStaff.email || !newStaff.joinDate) {
+      setError("Please fill required fields (Full Name, Role, Email, Join Date).");
+      return;
+    }
+    setError(null);
+    await addDocument(newStaff);
+    setNewStaff({
+      fullName: '', role: '', department: '', specialization: '', qualification: '',
+      email: '', phoneNumber: '', joinDate: format(new Date(), 'yyyy-MM-dd'), address: '', notes: ''
+    });
+    setShowAddStaffModal(false);
+  };
+
+  const handleDeleteStaffMember = async (id) => {
+    await deleteDocument(id);
+  };
+
+  const handleGenerateTrainingMaterial = async () => {
+    if (!trainingTopic.trim()) {
+      callTrainingApi("Please enter a training topic.");
+      return;
+    }
+    const prompt = `Generate concise training material for lab staff on the topic: "${trainingTopic.trim()}". Include key points, safety considerations if applicable, and best practices. Format it clearly for a training document.`;
+    await callTrainingApi(prompt);
+  };
+
+  if (loading) return <div className="text-center p-4 text-gray-300">Loading staff...</div>;
+  if (error) return <div className="text-center p-4 text-red-400">{error}</div>;
+
+  return (
+    <div className="p-6 bg-gray-800 rounded-lg shadow-lg">
+      <h3 className="text-xl font-semibold mb-4 text-white">Staff Management</h3>
+      <div className="mb-4 flex justify-between items-center">
+        <button
+          onClick={() => { setShowTrainingModal(true); setTrainingTopic(''); callTrainingApi(null); }} // Clear previous input and output
+          className="bg-purple-600 hover:bg-purple-700 text-white py-2 px-4 rounded-md transition duration-200 flex items-center space-x-2"
+        >
+          ✨ Generate Training Material
+        </button>
+        <button
+          onClick={() => setShowAddStaffModal(true)}
+          className="bg-blue-600 hover:bg-blue-700 text-white py-2 px-4 rounded-md transition duration-200"
+        >
+          + Add Staff Member
+        </button>
+      </div>
+
+      {staffMembers.length === 0 ? (
+        <p className="text-gray-400">No staff members registered yet.</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="min-w-full bg-gray-900 border border-gray-700 rounded-md text-white">
+            <thead className="bg-gray-700">
+              <tr>
+                <th className="py-2 px-4 border-b border-gray-600 text-left text-sm font-semibold text-gray-300">ID</th>
+                <th className="py-2 px-4 border-b border-gray-600 text-left text-sm font-semibold text-gray-300">Name</th>
+                <th className="py-2 px-4 border-b border-gray-600 text-left text-sm font-semibold text-gray-300">Role</th>
+                <th className="py-2 px-4 border-b border-gray-600 text-left text-sm font-semibold text-gray-300">Email</th>
+                <th className="py-2 px-4 border-b border-gray-600 text-left text-sm font-semibold text-gray-300">Join Date</th>
+                <th className="py-2 px-4 border-b border-gray-600 text-left text-sm font-semibold text-gray-300">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {staffMembers.map((member) => (
+                <tr key={member.id} className="hover:bg-gray-700 border-b border-gray-600">
+                  <td className="py-2 px-4 text-sm text-gray-300">{member.id.substring(0, 6)}</td>
+                  <td className="py-2 px-4 text-sm text-white font-medium">{member.fullName}</td>
+                  <td className="py-2 px-4 text-sm text-gray-300">
+                    <span className="px-2 py-1 rounded-full text-xs font-semibold bg-purple-800 text-purple-200">
+                      {member.role}
+                    </span>
+                  </td>
+                  <td className="py-2 px-4 text-sm text-gray-300">{member.email}</td>
+                  <td className="py-2 px-4 text-sm text-gray-300">
+                    {member.joinDate ? format(parseISO(member.joinDate), 'MMM dd,yyyy') : 'N/A'}
+                  </td>
+                  <td className="py-2 px-4 text-sm">
+                    <button
+                      onClick={() => handleDeleteStaffMember(member.id)}
+                      className="bg-red-600 hover:bg-red-700 text-white text-xs py-1 px-2 rounded-md transition duration-200"
+                    >
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Add Staff Modal */}
+      <Modal isOpen={showAddStaffModal} onClose={() => setShowAddStaffModal(false)} title="Add New Staff Member">
+        <form onSubmit={(e) => { e.preventDefault(); handleAddStaffMember(); }} className="grid grid-cols-2 gap-4">
+          <div className="col-span-2">
+            <label className="block text-sm font-medium text-gray-300 mb-1">Full Name *</label>
+            <input type="text" name="fullName" value={newStaff.fullName} onChange={handleNewStaffChange}
+                   className="w-full p-2 border border-gray-600 bg-gray-700 rounded-md focus:ring-blue-500 focus:border-blue-500" required />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-1">Role *</label>
+            <select name="role" value={newStaff.role} onChange={handleNewStaffChange}
+                    className="w-full p-2 border border-gray-600 bg-gray-700 rounded-md focus:ring-blue-500 focus:border-blue-500" required>
+              <option value="">Select role</option>
+              {roles.map(role => <option key={role} value={role}>{role}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-1">Department</label>
+            <input type="text" name="department" value={newStaff.department} onChange={handleNewStaffChange}
+                   className="w-full p-2 border border-gray-600 bg-gray-700 rounded-md focus:ring-blue-500 focus:border-blue-500" />
+          </div>
+          <div className="col-span-2">
+            <label className="block text-sm font-medium text-gray-300 mb-1">Specialization</label>
+            <input type="text" name="specialization" value={newStaff.specialization} onChange={handleNewStaffChange}
+                   className="w-full p-2 border border-gray-600 bg-gray-700 rounded-md focus:ring-blue-500 focus:border-blue-500" />
+          </div>
+          <div className="col-span-2">
+            <label className="block text-sm font-medium text-gray-300 mb-1">Qualification</label>
+            <input type="text" name="qualification" value={newStaff.qualification} onChange={handleNewStaffChange}
+                   className="w-full p-2 border border-gray-600 bg-gray-700 rounded-md focus:ring-blue-500 focus:border-blue-500" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-1">Email *</label>
+            <input type="email" name="email" value={newStaff.email} onChange={handleNewStaffChange}
+                   className="w-full p-2 border border-gray-600 bg-gray-700 rounded-md focus:ring-blue-500 focus:border-blue-500" required />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-1">Phone Number</label>
+            <input type="text" name="phoneNumber" value={newStaff.phoneNumber} onChange={handleNewStaffChange}
+                   className="w-full p-2 border border-gray-600 bg-gray-700 rounded-md focus:ring-blue-500 focus:border-blue-500" />
+          </div>
+          <div className="col-span-2">
+            <label className="block text-sm font-medium text-gray-300 mb-1">Join Date *</label>
+            <input type="date" name="joinDate" value={newStaff.joinDate} onChange={handleNewStaffChange}
+                   className="w-full p-2 border border-gray-600 bg-gray-700 rounded-md focus:ring-blue-500 focus:border-blue-500" required />
+          </div>
+          <div className="col-span-2">
+            <label className="block text-sm font-medium text-gray-300 mb-1">Address</label>
+            <textarea name="address" value={newStaff.address} onChange={handleNewStaffChange} rows="2"
+                      className="w-full p-2 border border-gray-600 bg-gray-700 rounded-md focus:ring-blue-500 focus:border-blue-500"></textarea>
+          </div>
+          <div className="col-span-2">
+            <label className="block text-sm font-medium text-gray-300 mb-1">Notes</label>
+            <textarea name="notes" value={newStaff.notes} onChange={handleNewStaffChange} rows="3"
+                      className="w-full p-2 border border-gray-600 bg-gray-700 rounded-md focus:ring-blue-500 focus:border-blue-500"></textarea>
+          </div>
+          {error && <p className="col-span-2 text-red-400 text-sm italic">{error}</p>}
+          <div className="col-span-2 flex space-x-2">
+            <button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md flex-1 transition duration-200">
+              Add Staff
+            </button>
+            <button type="button" onClick={() => setShowAddStaffModal(false)} className="bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded-md flex-1 transition duration-200">
+              Cancel
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Training Material Modal */}
+      <Modal isOpen={showTrainingModal} onClose={() => setShowTrainingModal(false)} title="Generate Training Material">
+        <div className="flex flex-col space-y-4">
+          <input
+            type="text"
+            placeholder="Enter training topic (e.g., 'Lab Safety Protocols', 'Using a Spectrophotometer')"
+            value={trainingTopic}
+            onChange={(e) => setTrainingTopic(e.target.value)}
+            className="w-full p-2 border border-gray-600 bg-gray-700 text-white rounded-md focus:ring-blue-500 focus:border-blue-500"
+          />
+          <button
+            onClick={handleGenerateTrainingMaterial}
+            className="bg-purple-600 hover:bg-purple-700 text-white py-2 px-4 rounded-md transition duration-200 flex items-center justify-center space-x-2"
+            disabled={trainingLoading}
+          >
+            {trainingLoading ? (
+              <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+            ) : (
+              '✨ Generate Material'
+            )}
+          </button>
+          {trainingMaterial && (
+            <div className="bg-gray-700 p-3 rounded-md border border-gray-600">
+              <h5 className="text-md font-semibold text-white mb-1">AI Generated Material:</h5>
+              <p className="text-gray-300 whitespace-pre-wrap text-sm">{trainingMaterial}</p>
+            </div>
+          )}
+          {trainingError && <p className="text-red-400 text-sm italic">{trainingError}</p>}
+        </div>
+      </Modal>
+    </div>
+  );
+};
+
+
+// Export Component
+const ExportData = () => {
+  const { db, userId } = useFirebase();
+  const [loading, setLoading] = useState(false);
+  const [exportError, setExportError] = useState(null);
+
+  const exportToPDF = async () => {
+    if (!db || !userId) {
+      setExportError("Not authenticated to export data.");
+      return;
+    }
+    setLoading(true);
+    setExportError(null);
+
+    try {
+      const samplesQuery = query(collection(db, `artifacts/${__app_id}/users/${userId}/samples`));
+      const inventoryQuery = query(collection(db, `artifacts/${__app_id}/users/${userId}/inventory`));
+      const experimentsQuery = query(collection(db, `artifacts/${__app_id}/users/${userId}/experiments`));
+      const staffQuery = query(collection(db, `artifacts/${__app_id}/users/${userId}/staff`));
+
+
+      const [samplesDocs, inventoryDocs, experimentsDocs, staffDocs] = await Promise.all([
+        getDocs(samplesQuery),
+        getDocs(inventoryQuery),
+        getDocs(experimentsQuery),
+        getDocs(staffQuery)
+      ]);
+
+      const samplesData = samplesDocs.docs.map(doc => doc.data());
+      const inventoryData = inventoryDocs.docs.map(doc => doc.data());
+      const experimentsData = experimentsDocs.docs.map(doc => doc.data());
+      const staffData = staffDocs.docs.map(doc => doc.data());
+
+
+      const printContent = document.createElement('div');
+      printContent.style.padding = '20px';
+      printContent.style.fontFamily = 'Inter, sans-serif';
+      printContent.style.color = '#1a202c'; // Ensure text is visible on white background
+
+      printContent.innerHTML += `<h1 style="text-align: center; margin-bottom: 20px; color: #1a202c;">BioTrack Lab System Management Data Export - ${format(new Date(), 'MMM dd,yyyy')}</h1>`;
+
+      // Helper for table styling
+      const tableStyle = "width: 100%; border-collapse: collapse; margin-bottom: 20px;";
+      const thStyle = "border: 1px solid #e2e8f0; padding: 8px; text-align: left; background-color: #f7fafc; color: #2d3748;";
+      const tdStyle = "border: 1px solid #e2e8f0; padding: 8px; text-align: left; color: #4a5568;";
+      const h2Style = "margin-top: 30px; margin-bottom: 15px; color: #2d3748; border-bottom: 1px solid #e2e8f0; padding-bottom: 5px;";
+      const pStyle = "color: #4a5568;";
+
+
+      // Samples Section
+      printContent.innerHTML += `<h2 style="${h2Style}">Sample Tracking</h2>`;
+      if (samplesData.length > 0) {
+        printContent.innerHTML += `<table style="${tableStyle}">
+          <thead>
+            <tr>
+              <th style="${thStyle}">Name</th>
+              <th style="${thStyle}">Type</th>
+              <th style="${thStyle}">Status</th>
+              <th style="${thStyle}">Added On</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${samplesData.map(s => `
+              <tr>
+                <td style="${tdStyle}">${s.name}</td>
+                <td style="${tdStyle}">${s.type}</td>
+                <td style="${tdStyle}">${s.status}</td>
+                <td style="${tdStyle}">${s.createdAt ? format(s.createdAt.toDate(), 'MMM dd,yyyy HH:mm') : 'N/A'}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>`;
+      } else {
+        printContent.innerHTML += `<p style="${pStyle}">No samples data available.</p>`;
+      }
+
+      // Inventory Section
+      printContent.innerHTML += `<h2 style="${h2Style}">Inventory Management</h2>`;
+      if (inventoryData.length > 0) {
+        printContent.innerHTML += `<table style="${tableStyle}">
+          <thead>
+            <tr>
+              <th style="${thStyle}">Name</th>
+              <th style="${thStyle}">Category</th>
+              <th style="${thStyle}">Location</th>
+              <th style="${thStyle}">Quantity</th>
+              <th style="${thStyle}">Unit</th>
+              <th style="${thStyle}">Min. Qty</th>
+              <th style="${thStyle}">Received On</th>
+              <th style="${thStyle}">Expiry Date</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${inventoryData.map(i => `
+              <tr>
+                <td style="${tdStyle}">${i.itemName}</td>
+                <td style="${tdStyle}">${i.category}</td>
+                <td style="${tdStyle}">${i.storageLocation}</td>
+                <td style="${tdStyle}">${i.quantity}</td>
+                <td style="${tdStyle}">${i.unit}</td>
+                <td style="${tdStyle}">${i.minQuantity}</td>
+                <td style="${tdStyle}">${i.dateReceived ? format(parseISO(i.dateReceived), 'MMM dd,yyyy') : 'N/A'}</td>
+                <td style="${tdStyle}">${i.expirationDate ? format(parseISO(i.expirationDate), 'MMM dd,yyyy') : 'N/A'}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>`;
+      } else {
+        printContent.innerHTML += `<p style="${pStyle}">No inventory data available.</p>`;
+      }
+
+      // Experiments Section
+      printContent.innerHTML += `<h2 style="${h2Style}">Experiments Registry</h2>`;
+      if (experimentsData.length > 0) {
+        printContent.innerHTML += `<table style="${tableStyle}">
+          <thead>
+            <tr>
+              <th style="${thStyle}">Title</th>
+              <th style="${thStyle}">Project</th>
+              <th style="${thStyle}">Responsible</th>
+              <th style="${thStyle}">Start Date</th>
+              <th style="${thStyle}">Due Date</th>
+              <th style="${thStyle}">Status</th>
+              <th style="${thStyle}">Completed On</th>
+              <th style="${thStyle}">Notes Count</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${experimentsData.map(e => `
+              <tr>
+                <td style="${tdStyle}">${e.title}</td>
+                <td style="${tdStyle}">${e.project}</td>
+                <td style="${tdStyle}">${e.responsibleStaffName}</td>
+                <td style="${tdStyle}">${e.startDate ? format(parseISO(e.startDate), 'MMM dd,yyyy') : 'N/A'}</td>
+                <td style="${tdStyle}">${e.dueDate ? format(parseISO(e.dueDate), 'MMM dd,yyyy') : 'N/A'}</td>
+                <td style="${tdStyle}">${e.status}</td>
+                <td style="${tdStyle}">${e.isCompleted && e.completionDate ? format(e.completionDate.toDate(), 'MMM dd,yyyy') : 'N/A'}</td>
+                <td style="${tdStyle}">${e.notes ? e.notes.length : 0}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>`;
+      } else {
+        printContent.innerHTML += `<p style="${pStyle}">No experiments data available.</p>`;
+      }
+
+      // Staff Section
+      printContent.innerHTML += `<h2 style="${h2Style}">Staff Directory</h2>`;
+      if (staffData.length > 0) {
+        printContent.innerHTML += `<table style="${tableStyle}">
+          <thead>
+            <tr>
+              <th style="${thStyle}">Full Name</th>
+              <th style="${thStyle}">Role</th>
+              <th style="${thStyle}">Department</th>
+              <th style="${thStyle}">Email</th>
+              <th style="${thStyle}">Join Date</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${staffData.map(s => `
+              <tr>
+                <td style="${tdStyle}">${s.fullName}</td>
+                <td style="${tdStyle}">${s.role}</td>
+                <td style="${tdStyle}">${s.department}</td>
+                <td style="${tdStyle}">${s.email}</td>
+                <td style="${tdStyle}">${s.joinDate ? format(parseISO(s.joinDate), 'MMM dd,yyyy') : 'N/A'}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>`;
+      } else {
+        printContent.innerHTML += `<p style="${pStyle}">No staff data available.</p>`;
+      }
+
+
+      document.body.appendChild(printContent);
+
+      const html2canvasLib = window.html2canvas;
+      const jsPDFLib = window.jsPDF; // Changed from window.jspdf.jsPDF
+
+      if (!html2canvasLib || !jsPDFLib) {
+        throw new Error("html2canvas or jsPDF libraries not loaded. Please check CDN links.");
+      }
+
+      const canvas = await html2canvasLib(printContent, { scale: 2 });
+      const imgData = canvas.toDataURL('image/png');
+      const pdf = new jsPDFLib('p', 'mm', 'a4');
+      const imgWidth = 210;
+      const pageHeight = 297;
+      const imgHeight = canvas.height * imgWidth / canvas.width;
+      let heightLeft = imgHeight;
+      let position = 0;
+
+      pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+      heightLeft -= pageHeight;
+
+      while (heightLeft >= 0) {
+        position = heightLeft - imgHeight;
+        pdf.addPage();
+        pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+        heightLeft -= pageHeight;
+      }
+
+      pdf.save(`biotrack_lab_data_export_${format(new Date(), 'yyyyMMdd_HHmmss')}.pdf`);
+
+      document.body.removeChild(printContent);
+
+    } catch (err) {
+      console.error("Error exporting to PDF:", err);
+      setExportError(`Failed to export PDF: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const exportToWord = async () => {
+    if (!db || !userId) {
+      setExportError("Not authenticated to export data.");
+      return;
+    }
+    setLoading(true);
+    setExportError(null);
+
+    try {
+      const samplesQuery = query(collection(db, `artifacts/${__app_id}/users/${userId}/samples`));
+      const inventoryQuery = query(collection(db, `artifacts/${__app_id}/users/${userId}/inventory`));
+      const experimentsQuery = query(collection(db, `artifacts/${__app_id}/users/${userId}/experiments`));
+      const staffQuery = query(collection(db, `artifacts/${__app_id}/users/${userId}/staff`));
+
+      const [samplesDocs, inventoryDocs, experimentsDocs, staffDocs] = await Promise.all([
+        getDocs(samplesQuery),
+        getDocs(inventoryQuery),
+        getDocs(experimentsQuery),
+        getDocs(staffQuery)
+      ]);
+
+      const samplesData = samplesDocs.docs.map(doc => doc.data());
+      const inventoryData = inventoryDocs.docs.map(doc => doc.data());
+      const experimentsData = experimentsDocs.docs.map(doc => doc.data());
+      const staffData = staffDocs.docs.map(doc => doc.data());
+
+      let htmlContent = `
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <title>BioTrack Lab System Management Data Export</title>
+            <style>
+                body { font-family: 'Inter', sans-serif; margin: 20px; color: #1a202c; }
+                h1 { text-align: center; margin-bottom: 20px; color: #1a202c; }
+                h2 { margin-top: 30px; margin-bottom: 15px; color: #2d3748; border-bottom: 1px solid #e2e8f0; padding-bottom: 5px;}
+                table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+                th, td { border: 1px solid #e2e8f0; padding: 8px; text-align: left; }
+                th { background-color: #f7fafc; }
+                p { color: #4a5568; }
+            </style>
+        </head>
+        <body>
+            <h1>BioTrack Lab System Management Data Export - ${format(new Date(), 'MMM dd,yyyy')}</h1>
+      `;
+
+      // Samples Section
+      htmlContent += `<h2>Sample Tracking</h2>`;
+      if (samplesData.length > 0) {
+        htmlContent += `<table>
+          <thead>
+            <tr>
+              <th>Name</th><th>Type</th><th>Status</th><th>Added On</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${samplesData.map(s => `
+              <tr>
+                <td>${s.name}</td>
+                <td>${s.type}</td>
+                <td>${s.status}</td>
+                <td>${s.createdAt ? format(s.createdAt.toDate(), 'MMM dd,yyyy HH:mm') : 'N/A'}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>`;
+      } else {
+        htmlContent += `<p>No samples data available.</p>`;
+      }
+
+      // Inventory Section
+      htmlContent += `<h2>Inventory Management</h2>`;
+      if (inventoryData.length > 0) {
+        htmlContent += `<table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Category</th>
+              <th>Location</th>
+              <th>Quantity</th>
+              <th>Unit</th>
+              <th>Min. Qty</th>
+              <th>Received On</th>
+              <th>Expiry Date</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${inventoryData.map(i => `
+              <tr>
+                <td>${i.itemName}</td>
+                <td>${i.category}</td>
+                <td>${i.storageLocation}</td>
+                <td>${i.quantity}</td>
+                <td>${i.unit}</td>
+                <td>${i.minQuantity}</td>
+                <td>${i.dateReceived ? format(parseISO(i.dateReceived), 'MMM dd,yyyy') : 'N/A'}</td>
+                <td>${i.expirationDate ? format(parseISO(i.expirationDate), 'MMM dd,yyyy') : 'N/A'}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>`;
+      } else {
+        htmlContent += `<p>No inventory data available.</p>`;
+      }
+
+      // Experiments Section
+      htmlContent += `<h2>Experiments Registry</h2>`;
+      if (experimentsData.length > 0) {
+        htmlContent += `<table>
+          <thead>
+            <tr>
+              <th>Title</th>
+              <th>Project</th>
+              <th>Responsible</th>
+              <th>Start Date</th>
+              <th>Due Date</th>
+              <th>Status</th>
+              <th>Completed On</th>
+              <th>Notes Count</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${experimentsData.map(e => `
+              <tr>
+                <td>${e.title}</td>
+                <td>${e.project}</td>
+                <td>${e.responsibleStaffName}</td>
+                <td>${e.startDate ? format(parseISO(e.startDate), 'MMM dd,yyyy') : 'N/A'}</td>
+                <td>${e.dueDate ? format(parseISO(e.dueDate), 'MMM dd,yyyy') : 'N/A'}</td>
+                <td>${e.status}</td>
+                <td>${e.isCompleted && e.completionDate ? format(e.completionDate.toDate(), 'MMM dd,yyyy') : 'N/A'}</td>
+                <td>${e.notes ? e.notes.length : 0}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>`;
+      } else {
+        htmlContent += `<p>No experiments data available.</p>`;
+      }
+
+      // Staff Section
+      htmlContent += `<h2>Staff Directory</h2>`;
+      if (staffData.length > 0) {
+        htmlContent += `<table>
+          <thead>
+            <tr>
+              <th>Full Name</th>
+              <th>Role</th>
+              <th>Department</th>
+              <th>Email</th>
+              <th>Join Date</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${staffData.map(s => `
+              <tr>
+                <td>${s.fullName}</td>
+                <td>${s.role}</td>
+                <td>${s.department}</td>
+                <td>${s.email}</td>
+                <td>${s.joinDate ? format(parseISO(s.joinDate), 'MMM dd,yyyy') : 'N/A'}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>`;
+      } else {
+        htmlContent += `<p>No staff data available.</p>`;
+      }
+
+      htmlContent += `</body></html>`;
+
+      const blob = new Blob([htmlContent], { type: 'application/msword' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `biotrack_lab_data_export_${format(new Date(), 'yyyyMMdd_HHmmss')}.doc`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+    } catch (err) {
+      console.error("Error exporting to Word:", err);
+      setExportError(`Failed to export Word document: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="p-6 bg-gray-800 rounded-lg shadow-lg">
+      <h3 className="text-xl font-semibold mb-4 text-white">Data Export</h3>
+      <p className="mb-4 text-gray-300">Download your lab data for Samples, Inventory, Experiments, and Staff.</p>
+      <div className="flex flex-col sm:flex-row space-y-3 sm:space-y-0 sm:space-x-4">
+        <button
+          onClick={exportToPDF}
+          className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-md flex-1 transition duration-200 flex items-center justify-center space-x-2"
+          disabled={loading}
+        >
+          {loading ? (
+            <>
+              <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+              <span>Generating PDF...</span>
+            </>
+          ) : (
+            <>
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4zm2 6a1 1 0 011-1h6a1 1 0 110 2H7a1 1 0 01-1-1zm1 3a1 1 0 100 2h6a1 1 0 100-2H7z" clipRule="evenodd" />
+              </svg>
+              <span>Download PDF</span>
+            </>
+          )}
+        </button>
+        <button
+          onClick={exportToWord}
+          className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md flex-1 transition duration-200 flex items-center justify-center space-x-2"
+          disabled={loading}
+        >
+          {loading ? (
+            <>
+              <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+              <span>Generating Word...</span>
+            </>
+          ) : (
+            <>
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                <path d="M9 2a1 1 0 000 2h2a1 1 0 100-2H9z" />
+                <path fillRule="evenodd" d="M4 5a2 2 0 012-2 3 3 0 003 3h2a3 3 0 003-3 2 2 0 012 2v11a2 2 0 01-2 2H6a2 2 0 01-2-2V5zm3 4a1 1 0 000 2h.01a1 1 0 100-2H7zm3 0a1 1 0 000 2h.01a1 1 0 100-2H10zm3 0a1 1 0 000 2h.01a1 1 0 100-2H13zm-3 4a1 1 0 100 2h.01a1 1 0 100-2H10zm3 0a1 1 0 100 2h.01a1 1 0 100-2H13z" clipRule="evenodd" />
+              </svg>
+              <span>Download Word</span>
+            </>
+          )}
+        </button>
+      </div>
+      {exportError && <p className="text-red-400 text-sm italic mt-4 text-center">{exportError}</p>}
+    </div>
+  );
+};
+
+
+// --- Main App Component ---
+const App = () => {
+  const { auth, userId, loading, authError } = useFirebase();
+  const [currentPage, setCurrentPage] = useState('dashboard'); // Default page to dashboard
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-900">
+        <p className="text-lg text-gray-300">Initializing BioTrack Lab System...</p>
+      </div>
+    );
+  }
+
+  if (authError) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-900">
+        <div className="text-center p-8 bg-gray-800 rounded-lg shadow-lg border border-gray-700">
+          <p className="text-red-400 font-bold mb-4">Error: {authError}</p>
+          <p className="text-gray-300">Please ensure Firebase is correctly configured.</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!userId || !auth.currentUser) {
+    return <Auth onLoginSuccess={() => setCurrentPage('dashboard')} />;
+  }
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      console.log("User logged out.");
+    } catch (error) {
+      console.error("Error logging out:", error);
+    }
+  };
+
+  const renderPage = () => {
+    switch (currentPage) {
+      case 'dashboard':
+        return <Dashboard />;
+      case 'samples':
+        return <SampleTracking />;
+      case 'inventory':
+        return <InventoryManagement />;
+      case 'experiments':
+        return <Experiments />;
+      case 'staff':
+        return <StaffManagement />;
+      case 'export':
+        return <ExportData />;
+      default:
+        return <Dashboard />;
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-900 font-sans text-gray-100">
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+        body {
+          font-family: 'Inter', sans-serif;
+        }
+      `}</style>
+      {/* CDN for html2canvas and jspdf */}
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+      <div className="bg-gray-800 text-white p-4 shadow-xl flex flex-col sm:flex-row justify-between items-center rounded-b-lg border-b border-gray-700">
+        <h1 className="text-3xl font-extrabold mb-2 sm:mb-0">BioTrack Lab System Management</h1>
+        <div className="flex items-center space-x-4">
+          <p className="text-sm text-gray-300">User ID: <span className="font-mono text-blue-300">{userId.substring(0, 8)}...</span></p>
+          <button
+            onClick={handleLogout}
+            className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-md text-sm font-semibold shadow-md transition duration-200"
+          >
+            Logout
+          </button>
+        </div>
+      </div>
+
+      <nav className="bg-gray-800 p-3 shadow-md mx-4 mt-4 rounded-lg border border-gray-700">
+        <ul className="flex flex-wrap justify-center space-x-2 sm:space-x-4">
+          <li>
+            <button
+              onClick={() => setCurrentPage('dashboard')}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition duration-200 ${
+                currentPage === 'dashboard' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-300 hover:bg-gray-700'
+              }`}
+            >
+              Dashboard
+            </button>
+          </li>
+          <li>
+            <button
+              onClick={() => setCurrentPage('samples')}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition duration-200 ${
+                currentPage === 'samples' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-300 hover:bg-gray-700'
+              }`}
+            >
+              Sample Tracking
+            </button>
+          </li>
+          <li>
+            <button
+              onClick={() => setCurrentPage('inventory')}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition duration-200 ${
+                currentPage === 'inventory' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-300 hover:bg-gray-700'
+              }`}
+            >
+              Inventory Management
+            </button>
+          </li>
+          <li>
+            <button
+              onClick={() => setCurrentPage('experiments')}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition duration-200 ${
+                currentPage === 'experiments' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-300 hover:bg-gray-700'
+              }`}
+            >
+              Experiments
+            </button>
+          </li>
+          <li>
+            <button
+              onClick={() => setCurrentPage('staff')}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition duration-200 ${
+                currentPage === 'staff' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-300 hover:bg-gray-700'
+              }`}
+            >
+              Staff
+            </button>
+          </li>
+          <li>
+            <button
+              onClick={() => setCurrentPage('export')}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition duration-200 ${
+                currentPage === 'export' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-300 hover:bg-gray-700'
+              }`}
+            >
+              Export Data
+            </button>
+          </li>
+        </ul>
+      </nav>
+
+      <main className="p-4">
+        <div className="max-w-6xl mx-auto">
+          {renderPage()}
+        </div>
+      </main>
+    </div>
+  );
+};
+
+// Wrap the main App component with the FirebaseProvider
+export default function ProvidedApp() {
+  return (
+    <FirebaseProvider>
+      <App />
+    </FirebaseProvider>
+  );
+}
